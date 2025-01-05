@@ -198,7 +198,7 @@ def circle(tiles, radius=25):
 
 if __name__ == '__main__':
     H = bases(1, 3**0.5)
-    for i in range(4):
+    for i in range(3):
         H = supers(H)
 
     tiles = H[0].flatten()
