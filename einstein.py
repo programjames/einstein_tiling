@@ -7,9 +7,54 @@ Ref:
 """
 
 import numpy as np
+from fractions import Fraction as F
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 from pysat.solvers import Glucose3
+
+class Qr3(object):
+    def __init__(self, a: F, b: F):
+        self.a = a
+        self.b = b
+    
+    @property
+    def real(self):
+        return self.a + 1.73205080757 * self.b
+    
+    def __repr__(self):
+        if self.a == 0 and self.b == 0:
+            return "0"
+        
+        if self.b == 0:
+            return str(self.a)
+        
+        b = "√3" if abs(self.b) == 1 else f"{abs(self.b)}√3"
+        if self.a == 0:
+            return b
+        
+        return f"{self.a} + {b}" if self.b > 0 else f"{self.a} - {b}"
+    
+    def __eq__(self, other):
+        return self.a == other.a and self.b == other.b
+    
+    def __add__(self, other):
+        return Qr3(self.a + other.a, self.b + other.b)
+    
+    def __sub__(self, other):
+        return Qr3(self.a - other.a, self.b - other.b)
+    
+    def __mul__(self, other):
+        return Qr3(self.a * other.a + 3 * self.b * other.b, self.a * other.b + self.b * other.a)
+    
+    def __div__(self, other):
+        a = self.a * other.a - 3 * self.b * other.b
+        b = self.b * other.a - self.a * other.b
+        d = other.a**2 - 3 * other.b**2
+        return Qr3(a / d, b / d)
+
+ONE = np.array([Qr3(1, 0), Qr3(0, 0)])
+ROT30 = np.array([[Qr3(0, F(1,2)), Qr3(F(1,2), 0)],
+                  [Qr3(F(-1,2), 0), Qr3(0, F(1,2))]])
 
 class Tile(object):
     def __init__(self, tiles, bounds):
@@ -61,43 +106,23 @@ class Base(Tile):
     def flatten(self):
         return [self]
 
-def edges(a, b):
-    return np.array([
-        [a, 0], [a, 2], [b, 11], [b, 1], [a, 4], [a, 2], [b, 5],
-        [b, 3], [a, 6], [a, 8], [a, 8], [a, 10], [b, 7], #[b, 9]
-    ], dtype=float)
-    
-def coords(e):
-    dx = e.T[0] * np.cos(e.T[1] * np.pi / 6)
-    dy = e.T[0] * np.sin(e.T[1] * np.pi / 6)
-    
-    x = np.r_[[0], np.cumsum(dx)]
-    y = np.r_[[0], np.cumsum(dy)]
-    
-    return np.c_[x, y]
-
 def bases(a, b):
     # Edges of a single tile in (length, angle) format:
-    e = np.array([
-        [a, 0], [a, 2], [b, 11], [b, 1], [a, 4], [a, 2], [b, 5],
-        [b, 3], [a, 6], [a, 8], [a, 8], [a, 10], [b, 7], #[b, 9]
-    ])
+    e = [
+        [a, 12], [a, 10], [b, 1], [b, 11], [a, 8], [a, 10], [b, 7],
+        [b, 9], [a, 6], [a, 4], [a, 4], [a, 2], [b, 5],
+    ]
     
     # Get the tile coordinates
-    dx = e.T[0] * np.cos(e.T[1] * np.pi / 6)
-    dy = e.T[0] * np.sin(e.T[1] * np.pi / 6)
-    
-    x = np.r_[[0], np.cumsum(dx)]
-    y = np.r_[[0], np.cumsum(dy)]
-    
-    x = np.c_[x, y]
+    dx = np.array([np.linalg.matrix_power(ROT30, angle) @ r for r, angle in e])
+    x = np.r_[[[Qr3(0,0), Qr3(0,0)]], np.cumsum(dx, axis=0)]
     
     # The quasi-boundary comes from four points
     b = x[(1, 3, 9, 13), :]
     
     # Get the flipped tile
     y = x[::-1].copy()
-    y[:, 1] *= -1
+    y[:, 1] *= Qr3(-1, 0)
     
     # And move it to be flush with the original tile
     y += x[0] - y[5]
@@ -108,20 +133,18 @@ def bases(a, b):
 def supers(subtiles):
     # The rules are based on Figure 2.11
     rules = [
-		[1, 2, 0, 0],
 		[2, 2, 0, 0],
-		[0, 1, 1, 1],
-		[4, 2, 2, 0],
-		[5, 2, 0, 0], 
-		[0, 2, 0, 0],
+		[4, 2, 0, 0],
+		[12, 1, 1, 1],
+		[8, 2, 2, 0],
+		[10, 2, 0, 0], 
+		[12, 2, 0, 0],
     ]
     
     tiles = [subtiles[0]]
     for angle, pivot, anchor, subtile in rules:
         # Rotation matrix
-        c = np.cos(angle * np.pi / 3)
-        s = np.sin(angle * np.pi / 3)
-        M = np.array([[c, s], [-s, c]])
+        M = np.linalg.matrix_power(ROT30, angle)
         
         # Rotate and translate subtile
         T = subtiles[subtile].copy().mul(M)
@@ -139,7 +162,7 @@ def neighbors(tiles):
     for i, t1 in enumerate(tiles):
         for j, t2 in enumerate(tiles):
             if i <= j: continue
-            if np.sum(np.all(np.isclose(t1.x[:, None, :], t2.x), axis=-1)) >= 2:
+            if np.sum(np.all(t1.x[:, None, :] == t2.x, axis=-1)) >= 2:
                 e.append((i, j))
     return e
 
@@ -197,7 +220,7 @@ def circle(tiles, radius=25):
     return list(filter(within_radius, tiles))
 
 if __name__ == '__main__':
-    H = bases(1, 3**0.5)
+    H = bases(ONE, ONE)
     for i in range(3):
         H = supers(H)
 
@@ -209,7 +232,8 @@ if __name__ == '__main__':
     fig, ax = plt.subplots()
     colors = [(1, 0, 0), (1, 1, 0), (0, 0, 1), (1, 0, 1)]
     for i, tile in enumerate(tiles):
-        poly = Polygon(tile.x, edgecolor='black', facecolor=colors[c[i]], lw=1)
+        points = [[x.real for x in point] for point in tile.x]
+        poly = Polygon(points, edgecolor='black', facecolor=colors[c[i]], lw=1)
         ax.add_patch(poly)
     ax.set_aspect('equal')
     ax.autoscale()
