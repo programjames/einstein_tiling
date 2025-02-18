@@ -7,9 +7,11 @@ Ref:
 """
 
 import numpy as np
+import math
 from fractions import Fraction as F
 import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon
+from matplotlib.path import Path
+from matplotlib.patches import Polygon, PathPatch, Arc
 from pysat.solvers import Glucose3
 
 class Qr3(object):
@@ -21,11 +23,13 @@ class Qr3(object):
     def real(self):
         return self.a + 1.73205080757 * self.b
     
+    def __float__(self):
+        return self.real
+    
     def __repr__(self):
         if self.a == 0 and self.b == 0:
             return "0"
         
-        if self.b == 0:
             return str(self.a)
         
         b = "√3" if abs(self.b) == 1 else f"{abs(self.b)}√3"
@@ -46,7 +50,7 @@ class Qr3(object):
     def __mul__(self, other):
         return Qr3(self.a * other.a + 3 * self.b * other.b, self.a * other.b + self.b * other.a)
     
-    def __div__(self, other):
+    def __truediv__(self, other):
         a = self.a * other.a - 3 * self.b * other.b
         b = self.b * other.a - self.a * other.b
         d = other.a**2 - 3 * other.b**2
@@ -59,16 +63,16 @@ ROT30 = np.array([[Qr3(0, F(1,2)), Qr3(F(1,2), 0)],
 class Tile(object):
     def __init__(self, tiles, bounds):
         self.tiles = tiles
-        self.bounds = bounds
+        self.b = bounds
         
     def add(self, dx):
-        self.bounds += dx
+        self.b += dx
         for tile in self.tiles:
             tile.add(dx)
         return self
             
     def mul(self, M):
-        self.bounds = self.bounds @ M
+        self.b = self.b @ M
         for tile in self.tiles:
             tile.mul(M)
         return self
@@ -76,32 +80,36 @@ class Tile(object):
     def copy(self):
         return Tile(
             [tile.copy() for tile in self.tiles],
-            self.bounds.copy()
+            self.b.copy()
         )
             
     def flatten(self):
         tiles = []
         for tile in self.tiles:
-            tiles += tile.flatten()
+            tiles.extend(tile.flatten())
         return tiles
     
 class Base(Tile):
     def __init__(self, x, bounds):
         self.x = x
-        self.bounds = bounds
+        self.b = bounds
         
     def add(self, dx):
         self.x += dx
-        self.bounds += dx
+        self.b += dx
         return self
         
     def mul(self, M):
         self.x = self.x @ M
-        self.bounds = self.bounds @ M
+        self.b = self.b @ M
         return self
     
+    @property
+    def edges(self):
+        return (self.x + np.roll(self.x, 1, axis=0)) / Qr3(2, 0)
+    
     def copy(self):
-        return Base(self.x.copy(), self.bounds.copy())
+        return Base(self.x.copy(), self.b.copy())
         
     def flatten(self):
         return [self]
@@ -126,9 +134,10 @@ def bases(a, b):
     
     # And move it to be flush with the original tile
     y += x[0] - y[5]
+    c = y[(1, 3, 9, 13), :]
     
     # Return two base tiles: the single (H8) and the compound (H7)
-    return Base(x, b), Tile([Base(x, b), Base(y, b)], b)
+    return Base(x, b), Tile([Base(x, b), Base(y, c)], b)
 
 def supers(subtiles):
     # The rules are based on Figure 2.11
@@ -148,12 +157,12 @@ def supers(subtiles):
         
         # Rotate and translate subtile
         T = subtiles[subtile].copy().mul(M)
-        T.add(tiles[-1].bounds[anchor] - T.bounds[pivot])
+        T.add(tiles[-1].b[anchor] - T.b[pivot])
         
         tiles.append(T)
     
-    bounds = [tiles[1].bounds[3], tiles[2].bounds[0],
-              tiles[4].bounds[3], tiles[6].bounds[0]]
+    bounds = [tiles[1].b[3], tiles[2].b[0],
+              tiles[4].b[3], tiles[6].b[0]]
     
     return Tile(tiles, bounds), Tile(tiles[:-1], bounds)
 
@@ -214,30 +223,49 @@ def four_color_sat(edges):
 
 def circle(tiles, radius=25):
     # Center of mass
-    G = sum(t.x for t in tiles).mean(axis=0) / len(tiles)
+    G = sum(t.x.astype(float) for t in tiles).mean(axis=0) / len(tiles)
     def within_radius(t):
-        return np.linalg.norm(t.x.mean(axis=0) - G) < radius
+        return np.linalg.norm(t.x.astype(float).mean(axis=0) - G) < radius
     return list(filter(within_radius, tiles))
+
+def bezier(ax, x, y, dx, dy, scale=0.5):
+    x, y, dx, dy = x.astype(float), y.astype(float), dx.astype(float), dy.astype(float)
+    for i in range(len(x)):
+        path = Path([x[i], x[i] + scale * dx[i], y[i] + scale * dy[i], y[i]],
+                    [Path.MOVETO, Path.CURVE4, Path.CURVE4, Path.CURVE4])
+        patch1 = PathPatch(path, facecolor='none', edgecolor='white', lw=4)
+        patch2 = PathPatch(path, facecolor='none', edgecolor='black', lw=2)
+        ax.add_patch(patch1)
+        ax.add_patch(patch2)
 
 if __name__ == '__main__':
     H = bases(ONE, ONE)
-    for i in range(3):
+    for i in range(4):
         H = supers(H)
 
-    tiles = H[0].flatten()
-    # tiles = circle(tiles, radius=25)
+    tiles = H[1].flatten()
+    tiles = circle(tiles, radius=10)
     e = neighbors(tiles)
     c = four_color_sat(e)
 
     fig, ax = plt.subplots()
-    colors = [(1, 0, 0), (1, 1, 0), (0, 0, 1), (1, 0, 1)]
-    for i, tile in enumerate(tiles):
-        points = [[x.real for x in point] for point in tile.x]
-        poly = Polygon(points, edgecolor='black', facecolor=colors[c[i]], lw=1)
-        ax.add_patch(poly)
     ax.set_aspect('equal')
     ax.autoscale()
     ax.set_axis_off()
+    
+    colors = [(1, 0, 0), (1, 1, 0), (0, 0, 1), (1, 0, 1)]
+    for i, tile in enumerate(tiles):
+        poly = Polygon(tile.x, edgecolor='none', facecolor=colors[c[i]], lw=1)
+        ax.add_patch(poly)
+        
+    plt.savefig('four-coloring.png', pad_inches=0, transparent=True, bbox_inches='tight', dpi=600)
+    
+    ROT90 = np.linalg.matrix_power(ROT30, 3)
+    for tile in tiles:
+        i = np.random.choice(range(len(tile.x)), (2, len(tile.x)//2), replace=False)
+        x = (tile.x[i] + np.roll(tile.x, 1, 0)[i]) / Qr3(2, 0)
+        dx = (tile.x[i] - np.roll(tile.x, 1, 0)[i]) @ ROT90
+        bezier(ax, *x, *dx)
 
-    plt.savefig('einstein.png', pad_inches=0, transparent=True, bbox_inches='tight', dpi=600)
+    plt.savefig('celtic-knot.png', pad_inches=0, transparent=True, bbox_inches='tight', dpi=600)
     plt.show()

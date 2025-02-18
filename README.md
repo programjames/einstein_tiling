@@ -1,4 +1,4 @@
-# Four Coloring of Einstein Tiling.
+# Celtic Knot from Einstein Tiling.
 
 ## Installation
 
@@ -12,4 +12,10 @@ pip install numpy matplotlib python-sat
 python einstein.py
 ```
 
-![Four-Colored Tiling](einstein.png)
+Without the rope, we have a four coloring:
+
+![Four-Colored Tiling](four-coloring.png)
+
+Here's one random celtic knot on this tiling:
+
+![Celtic Knot](celtic-knot.png)
